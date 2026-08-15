@@ -48,6 +48,17 @@ def atomic_json(path: Path, value):
         temporary.unlink(missing_ok=True)
 
 
+def active_layout():
+    path = STATE / "active-layout.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if value.get("schema") == "rapp-infrastructure-city-layout/1":
+            return value
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
 def publish(layout):
     credential = CREDENTIAL.read_text(encoding="utf-8").strip()
     body = json.dumps(layout).encode()
@@ -99,24 +110,25 @@ def tick_lock():
 def _tick(owner="kody-w", apply=True):
     raw = collect_all(owner=owner)
     snapshot = build_snapshot(raw).to_dict()
-    layout = build_layout(snapshot)
+    layout = build_layout(snapshot, previous_layout=active_layout())
     generation = secrets.token_hex(12)
     snapshot["generation"] = generation
     layout["generation"] = generation
-    atomic_json(STATE / "snapshot.json", snapshot)
-    atomic_json(STATE / "layout.json", layout)
     result = publish(layout) if apply else {"dry_run": True}
-    atomic_json(
-        STATE / "last-run.json",
-        {
-            "at": snapshot["generated_at"],
-            "generation": generation,
-            "status": snapshot["summary"]["overall_status"],
-            "summary": snapshot["summary"],
-            "layout": layout["summary"],
-            "bridge": result,
-        },
-    )
+    if apply:
+        atomic_json(STATE / "snapshot.json", snapshot)
+        atomic_json(STATE / "layout.json", layout)
+        atomic_json(
+            STATE / "last-run.json",
+            {
+                "at": snapshot["generated_at"],
+                "generation": generation,
+                "status": snapshot["summary"]["overall_status"],
+                "summary": snapshot["summary"],
+                "layout": layout["summary"],
+                "bridge": result,
+            },
+        )
     output = {
         "status": snapshot["summary"]["overall_status"],
         "entities": snapshot["summary"]["all_entities"],

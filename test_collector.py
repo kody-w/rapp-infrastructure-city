@@ -2,6 +2,7 @@
 """Collector contract tests for real GitHub field shapes and cache ownership."""
 
 import json
+import os
 import pathlib
 import tempfile
 
@@ -101,4 +102,30 @@ assert city_collector.cached_repositories(
     "wrong-owner",
 ) is None
 
-print("city collector: 6 assertions passed")
+stale = tmp / "stale.json"
+stale_value = {
+    "owner": "right-owner",
+    "repositories": [{
+        "name": "repo",
+        "name_with_owner": "right-owner/repo",
+        "workflows": [{"id": 1, "name": "CI"}],
+    }],
+}
+stale.write_text(json.dumps(stale_value))
+os.utime(stale, (1, 1))
+city_collector.run_json = lambda command, timeout=30: (
+    (_ for _ in ()).throw(RuntimeError("GitHub unavailable"))
+)
+try:
+    repos = city_collector.collect_repositories(
+        owner="right-owner",
+        cache_path=stale,
+        cache_ttl=1,
+    )
+finally:
+    city_collector.run_json = original_run_json
+assert repos[0]["workflows"] == stale_value["repositories"][0]["workflows"]
+assert "repository list failed" in repos[0]["collection_error"]
+assert json.loads(stale.read_text()) == stale_value
+
+print("city collector: 9 assertions passed")

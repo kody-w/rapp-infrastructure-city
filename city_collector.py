@@ -274,9 +274,9 @@ def collect_sentinels() -> List[Dict[str, Any]]:
     ]
 
 
-def read_cache(path: Path, ttl: int) -> Any:
+def read_cache(path: Path, ttl: int = None) -> Any:
     try:
-        if time.time() - path.stat().st_mtime > ttl:
+        if ttl is not None and time.time() - path.stat().st_mtime > ttl:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -405,7 +405,7 @@ def collect_repositories(
     if fresh is not None:
         return fresh
     stale = cached_repositories(
-        read_cache(cache_path, 365 * 24 * 3600),
+        read_cache(cache_path),
         owner,
     )
     stale_by_name = {
@@ -413,19 +413,31 @@ def collect_repositories(
         for item in (stale or [])
         if item.get("name")
     }
-    repos = run_json(
-        [
-            "gh",
-            "repo",
-            "list",
-            owner,
-            "--limit",
-            "1000",
-            "--json",
-            "name,isArchived,isPrivate,pushedAt,url",
-        ],
-        timeout=60,
-    )
+    try:
+        repos = run_json(
+            [
+                "gh",
+                "repo",
+                "list",
+                owner,
+                "--limit",
+                "1000",
+                "--json",
+                "name,isArchived,isPrivate,pushedAt,url",
+            ],
+            timeout=60,
+        )
+    except Exception as exc:
+        if stale is None:
+            raise
+        detail = f"repository list failed: {exc}"[:300]
+        return [
+            {
+                **item,
+                "collection_error": detail,
+            }
+            for item in stale
+        ]
     output = []
     errors = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:

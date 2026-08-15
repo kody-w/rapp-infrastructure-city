@@ -44,6 +44,9 @@ The city does not expose raw Minecraft commands.
   city zone.
 - Blocks come from a fixed allowlist.
 - Plans are capped at 750 structures, 1,500 features, and 5,000 operations.
+- The generator enforces those caps and city bounds before contacting Minecraft.
+- Existing entity coordinates are retained as the city grows, preventing
+  unrelated towers from being cleared and rebuilt.
 - Changed structures are applied through score-one mutation proofs.
 - Chunks are loaded temporarily; only chunks added by this operation are
   removed afterwards.
@@ -100,4 +103,4 @@ python3 city_daemon.py --dry-run
 ```
 
 The dry run builds and validates the complete real plan without mutating
-Minecraft.
+Minecraft or overwriting the authoritative deployed layout.
