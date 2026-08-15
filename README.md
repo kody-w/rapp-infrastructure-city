@@ -77,6 +77,18 @@ python3 ~/.rapp/hub/minecraft/infrastructure-city/runtime/repair_approval.py can
 Tokens expire after ten minutes and transition to `executing` before the
 external command runs, so concurrent approvals cannot execute twice.
 
+## Live browser explorer
+
+RAPPhub exposes a reload-safe, loopback-only spectator for the city. Read its
+current URL from `http://127.0.0.1:25575/health` under
+`infrastructure_explorer.viewer_url` (the two-bot default is
+`http://127.0.0.1:3010`).
+
+Use WASD to fly, Space/Shift for altitude, Control to boost, R to reset, and
+mouse drag/wheel to look and zoom. The explorer renders exact Minecraft
+1.21.11 block states and moves only its dedicated spectator; it cannot mutate
+blocks, chat, approve repairs, or issue arbitrary commands.
+
 ## Install
 
 Requires the infrastructure-city bridge contract merged in
