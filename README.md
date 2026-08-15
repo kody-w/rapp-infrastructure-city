@@ -12,12 +12,10 @@ Your real infrastructure as a live Minecraft city.
 
 ## Scale
 
-The first live snapshot contains:
-
-- 565 repositories
-- 546 workflows
-- 583 buildings
-- 1,129 evidence-backed entities
+The live deployment currently contains 561 repositories, 546 workflows,
+584 buildings, and 1,130 evidence-backed entities. Counts are discovered
+dynamically; `~/.rapp/hub/minecraft/infrastructure-city/last-run.json` is the
+authoritative current total.
 
 The generated district occupies the reserved north world zone
 `x=-220..220, y=4..40, z=64..370`; existing append-only AIVM structures remain
