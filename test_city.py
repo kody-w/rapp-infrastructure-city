@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic city-model, layout, and approval-gate tests."""
 
+import copy
 import os
 import pathlib
 import subprocess
@@ -84,6 +85,134 @@ for structure in layout["structures"]:
     assert -220 <= minimum[0] <= maximum[0] <= 220
     assert 4 <= minimum[1] <= maximum[1] <= 40
     assert 64 <= minimum[2] <= maximum[2] <= 370
+
+dense_raw = copy.deepcopy(RAW)
+dense_raw["repositories"][0]["workflows"] = [
+    {
+        "id": index,
+        "name": f"workflow-{index:03d}",
+        "state": "active",
+        "latest_run": {
+            "status": "completed",
+            "conclusion": "success",
+            "database_id": 1000 + index,
+        },
+    }
+    for index in range(1, 101)
+]
+dense_layout = build_layout(build_snapshot(dense_raw).to_dict())
+assert dense_layout["summary"]["features"] == 100
+assert "workflow:owner/repo:100" in dense_layout["entity_index"]
+dense_repository = next(
+    structure
+    for structure in dense_layout["structures"]
+    if structure["kind"] == "repository"
+)
+dense_positions = [
+    tuple(feature["position"])
+    for feature in dense_repository["features"]
+]
+assert len(dense_positions) == 100
+assert len(dense_positions) == len(set(dense_positions))
+
+def repository_raw(count, prefix="repo"):
+    return {
+        "observed_at": RAW["observed_at"],
+        "machines": [],
+        "daemons": [],
+        "sentinels": [],
+        "repositories": [
+            {
+                "name": f"{prefix}{index:04d}",
+                "name_with_owner": f"owner/{prefix}{index:04d}",
+                "workflows": [],
+            }
+            for index in range(count)
+        ],
+    }
+
+
+scale_layout = build_layout(build_snapshot(repository_raw(703)).to_dict())
+assert scale_layout["summary"]["structures"] == 703
+for structure in scale_layout["structures"]:
+    minimum, maximum = structure["bounds"]["min"], structure["bounds"]["max"]
+    assert -220 <= minimum[0] <= maximum[0] <= 220
+    assert 64 <= minimum[2] <= maximum[2] <= 370
+
+machine_raw = repository_raw(1)
+machine_raw["machines"] = [
+    {
+        "id": f"machine-{index}",
+        "name": f"machine-{index}",
+        "online": True,
+    }
+    for index in range(36)
+]
+machine_layout = build_layout(build_snapshot(machine_raw).to_dict())
+assert len([
+    structure
+    for structure in machine_layout["structures"]
+    if structure["kind"] == "machine"
+]) == 36
+
+first_snapshot = build_snapshot(repository_raw(561, "repo")).to_dict()
+first_layout = build_layout(first_snapshot)
+added_raw = repository_raw(561, "repo")
+added_raw["repositories"].append({
+    "name": "aaa-new",
+    "name_with_owner": "owner/aaa-new",
+    "workflows": [],
+})
+second_layout = build_layout(
+    build_snapshot(added_raw).to_dict(),
+    previous_layout=first_layout,
+)
+first_origins = {
+    item["entity_id"]: item["origin"]
+    for item in first_layout["structures"]
+}
+second_origins = {
+    item["entity_id"]: item["origin"]
+    for item in second_layout["structures"]
+}
+assert all(
+    second_origins[entity_id] == origin
+    for entity_id, origin in first_origins.items()
+)
+
+try:
+    build_layout(build_snapshot(repository_raw(751)).to_dict())
+    raise AssertionError("structure cap should fail closed")
+except ValueError as exc:
+    assert "structures exceeds" in str(exc)
+
+feature_cap_raw = repository_raw(31)
+for repo_value in feature_cap_raw["repositories"]:
+    repo_value["workflows"] = [
+        {"id": index, "name": f"workflow-{index}", "state": "active"}
+        for index in range(49)
+    ]
+try:
+    build_layout(build_snapshot(feature_cap_raw).to_dict())
+    raise AssertionError("feature cap should fail closed")
+except ValueError as exc:
+    assert "features exceeds" in str(exc)
+
+operation_cap_raw = repository_raw(1)
+operation_cap_raw["daemons"] = [
+    {
+        "label": f"com.rapp.failure-{index}",
+        "loaded": False,
+        "pid": None,
+        "last_exit": 1,
+    }
+    for index in range(715)
+]
+try:
+    build_layout(build_snapshot(operation_cap_raw).to_dict())
+    raise AssertionError("operation cap should fail closed")
+except ValueError as exc:
+    assert "operations exceeds" in str(exc)
 
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="city-approval-test-"))
 repair_approval.STATE = tmp
@@ -193,4 +322,27 @@ with city_daemon.tick_lock() as acquired:
     contender.join()
 assert lock_results == [False]
 
-print("city model: 24 assertions passed")
+original_state = city_daemon.STATE
+original_collect_all = city_daemon.collect_all
+original_publish = city_daemon.publish
+city_daemon.STATE = tmp / "dry-run-state"
+city_daemon.collect_all = lambda owner="kody-w": copy.deepcopy(RAW)
+try:
+    dry_result = city_daemon._tick(apply=False)
+    assert dry_result["bridge"] == {"dry_run": True}
+    assert not city_daemon.STATE.exists()
+    city_daemon.publish = lambda layout: (
+        (_ for _ in ()).throw(RuntimeError("injected publish failure"))
+    )
+    try:
+        city_daemon._tick(apply=True)
+        raise AssertionError("publish failure should propagate")
+    except RuntimeError as exc:
+        assert "injected publish failure" in str(exc)
+    assert not city_daemon.STATE.exists()
+finally:
+    city_daemon.STATE = original_state
+    city_daemon.collect_all = original_collect_all
+    city_daemon.publish = original_publish
+
+print("city model: 44 assertions passed")

@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
 """Translate a city snapshot into deterministic Minecraft structures."""
 
-import math
 from typing import Any, Dict, Iterable, List, Tuple
 
-from city_model import SEVERITY
-
 BASE_Y = 4
+CITY_ZONE = {
+    "min_x": -220,
+    "max_x": 220,
+    "min_y": 4,
+    "max_y": 40,
+    "min_z": 64,
+    "max_z": 370,
+}
+MAX_STRUCTURES = 750
+MAX_FEATURES = 1500
+MAX_OPERATIONS = 5000
+MAX_WORKFLOW_LAYERS = 5
+WORKFLOW_LAYER_SIZE = 49
+MAX_WORKFLOWS_PER_REPOSITORY = (
+    MAX_WORKFLOW_LAYERS * WORKFLOW_LAYER_SIZE
+)
 STATUS_BLOCKS = {
     "healthy": "minecraft:emerald_block",
     "active": "minecraft:diamond_block",
@@ -21,6 +34,20 @@ KIND_BASE = {
     "sentinel": "minecraft:amethyst_block",
     "repository": "minecraft:stone_bricks",
 }
+KIND_WIDTH = {
+    "machine": 9,
+    "daemon": 5,
+    "sentinel": 7,
+    "repository": 7,
+}
+SERVICE_Z = {
+    "machine": 72,
+    "daemon": 84,
+    "sentinel": 96,
+}
+SERVICE_X = tuple(range(-210, 211, 10))
+REPOSITORY_X = tuple(range(-195, 196, 10))
+REPOSITORY_Z = tuple(range(112, 363, 10))
 
 
 def short_text(value: Any, limit: int = 80) -> str:
@@ -34,31 +61,187 @@ def flatten(entities: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
         yield from flatten(entity.get("children", []))
 
 
-def district_origins(snapshot: Dict[str, Any]) -> Dict[str, List[Tuple[Dict[str, Any], int, int]]]:
+def previous_origins(
+    previous_layout: Dict[str, Any] = None,
+) -> Dict[str, Tuple[str, int, int]]:
+    origins = {}
+    if not isinstance(previous_layout, dict):
+        return origins
+    for structure in previous_layout.get("structures", []):
+        origin = structure.get("origin")
+        if (
+            isinstance(structure.get("entity_id"), str)
+            and structure.get("kind") in KIND_WIDTH
+            and isinstance(origin, list)
+            and len(origin) == 3
+            and all(isinstance(value, int) for value in origin)
+        ):
+            origins[structure["entity_id"]] = (
+                structure["kind"],
+                origin[0],
+                origin[2],
+            )
+    return origins
+
+
+def footprint(kind: str, x: int, z: int) -> Tuple[int, int, int, int]:
+    half = KIND_WIDTH[kind] // 2
+    return (x - half, x + half, z - half - 1, z + half)
+
+
+def footprints_overlap(
+    left: Tuple[int, int, int, int],
+    right: Tuple[int, int, int, int],
+) -> bool:
+    return not (
+        left[1] < right[0]
+        or right[1] < left[0]
+        or left[3] < right[2]
+        or right[3] < left[2]
+    )
+
+
+def valid_origin(kind: str, x: int, z: int) -> bool:
+    minimum_x, maximum_x, minimum_z, maximum_z = footprint(kind, x, z)
+    if (
+        minimum_x < CITY_ZONE["min_x"]
+        or maximum_x > CITY_ZONE["max_x"]
+        or minimum_z < CITY_ZONE["min_z"]
+        or maximum_z > CITY_ZONE["max_z"]
+    ):
+        return False
+    if kind == "repository":
+        return z >= REPOSITORY_Z[0]
+    return z == SERVICE_Z[kind]
+
+
+def candidate_origins(kind: str) -> Iterable[Tuple[int, int]]:
+    if kind == "repository":
+        ordered_x = sorted(REPOSITORY_X, key=lambda value: (abs(value), value))
+        for z in REPOSITORY_Z:
+            for x in ordered_x:
+                yield x, z
+        return
+    for x in sorted(SERVICE_X, key=lambda value: (abs(value), value)):
+        yield x, SERVICE_Z[kind]
+
+
+def place_kind(
+    kind: str,
+    entities: List[Dict[str, Any]],
+    prior: Dict[str, Tuple[str, int, int]],
+) -> List[Tuple[Dict[str, Any], int, int]]:
+    placements = {}
+    occupied: List[Tuple[int, int, int, int]] = []
+    for entity in sorted(entities, key=lambda item: item["id"]):
+        previous = prior.get(entity["id"])
+        if not previous or previous[0] != kind:
+            continue
+        _, x, z = previous
+        candidate = footprint(kind, x, z)
+        if (
+            valid_origin(kind, x, z)
+            and not any(
+                footprints_overlap(candidate, existing)
+                for existing in occupied
+            )
+        ):
+            placements[entity["id"]] = (x, z)
+            occupied.append(candidate)
+
+    available = list(candidate_origins(kind))
+    for entity in sorted(entities, key=lambda item: item["id"]):
+        if entity["id"] in placements:
+            continue
+        for x, z in available:
+            candidate = footprint(kind, x, z)
+            if any(
+                footprints_overlap(candidate, existing)
+                for existing in occupied
+            ):
+                continue
+            placements[entity["id"]] = (x, z)
+            occupied.append(candidate)
+            break
+        else:
+            raise ValueError(
+                f"{kind} district cannot safely place {len(entities)} buildings"
+            )
+    return [
+        (entity, *placements[entity["id"]])
+        for entity in entities
+    ]
+
+
+def validate_snapshot_capacity(snapshot: Dict[str, Any]) -> None:
+    entities = snapshot.get("entities", [])
+    if not entities:
+        raise ValueError("city layout must contain at least one structure")
+    unknown = sorted({
+        str(entity.get("kind"))
+        for entity in entities
+        if entity.get("kind") not in KIND_WIDTH
+    })
+    if unknown:
+        raise ValueError(f"unsupported top-level entity kinds: {', '.join(unknown)}")
+
+    ids = []
+    feature_count = 0
+    operation_count = 0
+    violations = []
+    for entity in entities:
+        ids.append(entity.get("id"))
+        children = entity.get("children", [])
+        operation_count += 3
+        if entity["kind"] == "repository":
+            feature_count += len(children)
+            operation_count += len(children)
+            if len(children) > MAX_WORKFLOWS_PER_REPOSITORY:
+                violations.append(
+                    f"{entity['id']} has {len(children)} workflows "
+                    f"(max {MAX_WORKFLOWS_PER_REPOSITORY})"
+                )
+        elif children:
+            violations.append(f"{entity['id']} has unsupported child entities")
+        elif entity.get("status") == "critical":
+            operation_count += 4
+        ids.extend(child.get("id") for child in children)
+
+    invalid_ids = [identifier for identifier in ids if not isinstance(identifier, str)]
+    if invalid_ids:
+        violations.append("every entity must have a string id")
+    elif len(ids) != len(set(ids)):
+        violations.append("entity ids must be globally unique")
+    if len(entities) > MAX_STRUCTURES:
+        violations.append(
+            f"{len(entities)} structures exceeds the {MAX_STRUCTURES} limit"
+        )
+    if feature_count > MAX_FEATURES:
+        violations.append(
+            f"{feature_count} features exceeds the {MAX_FEATURES} limit"
+        )
+    if operation_count > MAX_OPERATIONS:
+        violations.append(
+            f"{operation_count} operations exceeds the {MAX_OPERATIONS} limit"
+        )
+    if violations:
+        raise ValueError("city layout exceeds safety limits: " + "; ".join(violations))
+
+
+def district_origins(
+    snapshot: Dict[str, Any],
+    previous_layout: Dict[str, Any] = None,
+) -> Dict[str, List[Tuple[Dict[str, Any], int, int]]]:
+    validate_snapshot_capacity(snapshot)
     grouped = {"machine": [], "daemon": [], "sentinel": [], "repository": []}
     for entity in snapshot.get("entities", []):
-        grouped.setdefault(entity["kind"], []).append(entity)
+        grouped[entity["kind"]].append(entity)
 
-    result: Dict[str, List[Tuple[Dict[str, Any], int, int]]] = {
-        key: [] for key in grouped
+    prior = previous_origins(previous_layout)
+    return {
+        kind: place_kind(kind, entities, prior)
+        for kind, entities in grouped.items()
     }
-    for index, entity in enumerate(grouped.get("machine", [])):
-        result["machine"].append((entity, -200 + index * 12, 72))
-    for index, entity in enumerate(grouped.get("daemon", [])):
-        result["daemon"].append((entity, -200 + index * 10, 84))
-    for index, entity in enumerate(grouped.get("sentinel", [])):
-        result["sentinel"].append((entity, -200 + index * 12, 96))
-
-    repos = grouped.get("repository", [])
-    columns = max(1, min(39, math.ceil(math.sqrt(len(repos)))))
-    spacing = 10
-    start_x = -((columns - 1) * spacing) // 2
-    for index, entity in enumerate(repos):
-        row, column = divmod(index, columns)
-        result["repository"].append(
-            (entity, start_x + column * spacing, 112 + row * spacing)
-        )
-    return result
 
 
 def fill(start, end, block):
@@ -106,8 +289,14 @@ def building(entity: Dict[str, Any], x: int, z: int) -> Dict[str, Any]:
             for dz in range(-half, half + 1)
             for dx in range(-half, half + 1)
         ]
-        for child, (dx, dz) in zip(children, roof_slots):
-            position = (x + dx, y1 + 1, z + dz)
+        for index, child in enumerate(children):
+            layer, slot = divmod(index, len(roof_slots))
+            if layer >= MAX_WORKFLOW_LAYERS:
+                raise ValueError(
+                    f"{entity['id']} exceeds workflow-light capacity"
+                )
+            dx, dz = roof_slots[slot]
+            position = (x + dx, y1 + layer + 1, z + dz)
             operations.append(
                 setblock(position, STATUS_BLOCKS[child["status"]])
             )
@@ -158,9 +347,15 @@ def building(entity: Dict[str, Any], x: int, z: int) -> Dict[str, Any]:
     }
 
 
-def build_layout(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+def build_layout(
+    snapshot: Dict[str, Any],
+    previous_layout: Dict[str, Any] = None,
+) -> Dict[str, Any]:
     structures = []
-    for kind, placements in district_origins(snapshot).items():
+    for kind, placements in district_origins(
+        snapshot,
+        previous_layout=previous_layout,
+    ).items():
         for entity, x, z in placements:
             structures.append(building(entity, x, z))
 
@@ -178,13 +373,44 @@ def build_layout(snapshot: Dict[str, Any]) -> Dict[str, Any]:
                 "position": feature["position"],
                 "kind": "workflow",
             }
+    expected_ids = {
+        entity["id"]
+        for entity in flatten(snapshot.get("entities", []))
+    }
+    if set(index) != expected_ids:
+        missing = sorted(expected_ids - set(index))
+        raise ValueError(
+            "layout did not index every entity: "
+            + ", ".join(missing[:5])
+        )
+    feature_count = sum(len(item["features"]) for item in structures)
+    operation_count = sum(len(item["operations"]) for item in structures)
+    for structure in structures:
+        minimum = structure["bounds"]["min"]
+        maximum = structure["bounds"]["max"]
+        sign = structure["sign"]["position"]
+        if (
+            minimum[0] < CITY_ZONE["min_x"]
+            or maximum[0] > CITY_ZONE["max_x"]
+            or minimum[1] < CITY_ZONE["min_y"]
+            or maximum[1] > CITY_ZONE["max_y"]
+            or minimum[2] < CITY_ZONE["min_z"]
+            or maximum[2] > CITY_ZONE["max_z"]
+            or sign[0] < CITY_ZONE["min_x"]
+            or sign[0] > CITY_ZONE["max_x"]
+            or sign[1] < CITY_ZONE["min_y"]
+            or sign[1] > CITY_ZONE["max_y"]
+            or sign[2] < CITY_ZONE["min_z"]
+            or sign[2] > CITY_ZONE["max_z"]
+        ):
+            raise ValueError(f"{structure['entity_id']} leaves the city zone")
     return {
         "schema": "rapp-infrastructure-city-layout/1",
         "generated_at": snapshot["generated_at"],
         "summary": {
             "structures": len(structures),
-            "features": sum(len(item["features"]) for item in structures),
-            "operations": sum(len(item["operations"]) for item in structures),
+            "features": feature_count,
+            "operations": operation_count,
             "overall_status": snapshot["summary"]["overall_status"],
         },
         "structures": structures,
