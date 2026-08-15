@@ -185,6 +185,7 @@ def build_layout(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             "structures": len(structures),
             "features": sum(len(item["features"]) for item in structures),
             "operations": sum(len(item["operations"]) for item in structures),
+            "overall_status": snapshot["summary"]["overall_status"],
         },
         "structures": structures,
         "entity_index": index,

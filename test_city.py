@@ -75,6 +75,7 @@ assert [child["status"] for child in repo["children"]] == ["healthy", "critical"
 layout = build_layout(snapshot)
 assert layout["summary"]["structures"] == 6
 assert layout["summary"]["features"] == 2
+assert layout["summary"]["overall_status"] == "critical"
 assert "workflow:owner/repo:1" in layout["entity_index"]
 assert "workflow:owner/repo:2" in layout["entity_index"]
 assert build_layout(snapshot) == layout
