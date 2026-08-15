@@ -163,6 +163,24 @@ requests = repair_approval.read_json(repair_approval.REQUESTS, {})
 assert requests[timeout_request["token"]]["status"] == "failed"
 assert "TimeoutExpired" in requests[timeout_request["token"]]["error"]
 
+cancel_request = repair_approval.request(
+    "workflow:owner/repo:cancel",
+    {
+        "id": "rerun",
+        "label": "Rerun",
+        "kind": "github_rerun",
+        "payload": {"repository": "owner/repo", "run_id": 456},
+        "approval_required": True,
+    },
+    "player",
+)
+assert repair_approval.cancel(cancel_request["token"])["status"] == "cancelled"
+try:
+    repair_approval.execute(cancel_request["token"])
+    raise AssertionError("cancelled token should not execute")
+except ValueError:
+    pass
+
 city_daemon.STATE = tmp / "daemon-state"
 lock_results = []
 with city_daemon.tick_lock() as acquired:
@@ -175,4 +193,4 @@ with city_daemon.tick_lock() as acquired:
     contender.join()
 assert lock_results == [False]
 
-print("city model: 22 assertions passed")
+print("city model: 24 assertions passed")

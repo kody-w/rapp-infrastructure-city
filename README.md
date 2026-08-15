@@ -70,6 +70,7 @@ Approve outside Minecraft:
 ```bash
 python3 ~/.rapp/hub/minecraft/infrastructure-city/runtime/repair_approval.py list
 python3 ~/.rapp/hub/minecraft/infrastructure-city/runtime/repair_approval.py approve TOKEN
+python3 ~/.rapp/hub/minecraft/infrastructure-city/runtime/repair_approval.py cancel TOKEN
 ```
 
 Tokens expire after ten minutes and transition to `executing` before the

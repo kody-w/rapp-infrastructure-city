@@ -178,15 +178,35 @@ def execute(token: str) -> Dict[str, Any]:
     return record
 
 
+def cancel(token: str) -> Dict[str, Any]:
+    with request_lock():
+        requests = read_json(REQUESTS, {})
+        record = requests.get(token)
+        if not record or record.get("status") != "pending":
+            raise ValueError("unknown or non-pending approval token")
+        record["status"] = "cancelled"
+        record["cancelled_at"] = iso()
+        write_json(REQUESTS, requests)
+    audit({
+        "event": "cancelled",
+        "token": token,
+        "entity_id": record["entity_id"],
+    })
+    return record
+
+
 def main():
     if len(sys.argv) < 2:
-        print("usage: repair_approval.py list | approve TOKEN")
+        print("usage: repair_approval.py list | approve TOKEN | cancel TOKEN")
         return 2
     if sys.argv[1] == "list":
         print(json.dumps(read_json(REQUESTS, {}), indent=2))
         return 0
     if sys.argv[1] == "approve" and len(sys.argv) == 3:
         print(json.dumps(execute(sys.argv[2].upper()), indent=2))
+        return 0
+    if sys.argv[1] == "cancel" and len(sys.argv) == 3:
+        print(json.dumps(cancel(sys.argv[2].upper()), indent=2))
         return 0
     return 2
 
