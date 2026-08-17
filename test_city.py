@@ -341,6 +341,31 @@ try:
 except ValueError:
     pass
 
+future_request = repair_approval.request(
+    "daemon:com.rapp.future",
+    {
+        "id": "restart",
+        "label": "Restart",
+        "kind": "launchd_restart",
+        "payload": {"label": "com.rapp.future"},
+        "approval_required": True,
+    },
+    "player",
+)
+requests = repair_approval.read_json(repair_approval.REQUESTS, {})
+requests[future_request["token"]]["created_at"] = "2999-01-01T00:00:00Z"
+requests[future_request["token"]]["expires_at"] = "2999-01-01T00:10:00Z"
+repair_approval.write_json(repair_approval.REQUESTS, requests)
+try:
+    repair_approval.execute(future_request["token"])
+    raise AssertionError("future-created token should fail")
+except ValueError as exc:
+    assert "creation time is in the future" in str(exc)
+assert repair_approval.read_json(
+    repair_approval.REQUESTS,
+    {},
+)[future_request["token"]]["status"] == "invalid"
+
 city_daemon.STATE = tmp / "daemon-state"
 lock_results = []
 with city_daemon.tick_lock() as acquired:
