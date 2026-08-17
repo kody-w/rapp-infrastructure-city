@@ -34,6 +34,10 @@ def iso(value=None):
     return (value or now()).isoformat(timespec="seconds")
 
 
+def parse_iso(value):
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
 def read_json(path, default):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -78,23 +82,45 @@ def request_lock():
 def request(entity_id: str, action: Dict[str, Any], player: str) -> Dict[str, Any]:
     if not action.get("approval_required", True):
         raise ValueError("repair action must require approval")
+    deduplicated = False
     with request_lock():
-        token = secrets.token_hex(3).upper()
         requests = read_json(REQUESTS, {})
-        while token in requests:
+        for existing in requests.values():
+            try:
+                live = now() <= parse_iso(existing["expires_at"])
+            except Exception:
+                live = False
+            if (
+                live
+                and existing.get("status") == "pending"
+                and existing.get("entity_id") == entity_id
+                and existing.get("player") == player
+                and existing.get("action") == action
+            ):
+                record = existing
+                deduplicated = True
+                break
+        else:
             token = secrets.token_hex(3).upper()
-        record = {
-            "token": token,
-            "entity_id": entity_id,
-            "action": action,
-            "player": player,
-            "created_at": iso(),
-            "expires_at": iso(now() + timedelta(minutes=10)),
-            "status": "pending",
-        }
-        requests[token] = record
-        write_json(REQUESTS, requests)
-    audit({"event": "requested", "token": token, "entity_id": entity_id, "player": player})
+            while token in requests:
+                token = secrets.token_hex(3).upper()
+            record = {
+                "token": token,
+                "entity_id": entity_id,
+                "action": action,
+                "player": player,
+                "created_at": iso(),
+                "expires_at": iso(now() + timedelta(minutes=10)),
+                "status": "pending",
+            }
+            requests[token] = record
+            write_json(REQUESTS, requests)
+    audit({
+        "event": "deduplicated" if deduplicated else "requested",
+        "token": record["token"],
+        "entity_id": entity_id,
+        "player": player,
+    })
     return record
 
 
@@ -104,7 +130,7 @@ def execute(token: str) -> Dict[str, Any]:
         record = requests.get(token)
         if not record or record.get("status") != "pending":
             raise ValueError("unknown or already-consumed approval token")
-        if now() > datetime.fromisoformat(record["expires_at"]):
+        if now() > parse_iso(record["expires_at"]):
             record["status"] = "expired"
             write_json(REQUESTS, requests)
             audit({"event": "expired", "token": token})

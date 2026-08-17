@@ -230,6 +230,37 @@ record = repair_approval.request(
     "player",
 )
 assert record["status"] == "pending"
+requests = repair_approval.read_json(repair_approval.REQUESTS, {})
+requests[record["token"]]["expires_at"] = (
+    requests[record["token"]]["expires_at"].replace("+00:00", "Z")
+)
+repair_approval.write_json(repair_approval.REQUESTS, requests)
+record = requests[record["token"]]
+dedupe_results = []
+dedupe_threads = [
+    threading.Thread(
+        target=lambda: dedupe_results.append(
+            repair_approval.request(
+                "daemon:com.rapp.good",
+                {
+                    "id": "restart",
+                    "label": "Restart",
+                    "kind": "launchd_restart",
+                    "payload": {"label": "com.rapp.good"},
+                    "approval_required": True,
+                },
+                "player",
+            )["token"]
+        )
+    )
+    for _ in range(4)
+]
+for thread in dedupe_threads:
+    thread.start()
+for thread in dedupe_threads:
+    thread.join()
+assert dedupe_results == [record["token"]] * 4
+assert len(repair_approval.read_json(repair_approval.REQUESTS, {})) == 1
 try:
     repair_approval.execute("NOTREAL")
     raise AssertionError("unknown token should fail")
