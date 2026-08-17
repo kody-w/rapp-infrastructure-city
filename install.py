@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -57,6 +58,19 @@ def bridge_ready():
         return "infrastructure_city" in value
     except Exception:
         return False
+
+
+def wait_service_unloaded(target, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if subprocess.run(
+            ["launchctl", "print", target],
+            capture_output=True,
+            text=True,
+        ).returncode != 0:
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"launchd service did not unload: {target}")
 
 
 def install(service=True):
@@ -112,6 +126,7 @@ def install(service=True):
 
         if service and sys.platform == "darwin":
             subprocess.run(["launchctl", "bootout", target], check=False)
+            wait_service_unloaded(target)
             subprocess.run(
                 ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST)],
                 check=True,
@@ -123,6 +138,10 @@ def install(service=True):
     except Exception:
         if service and sys.platform == "darwin":
             subprocess.run(["launchctl", "bootout", target], check=False)
+            try:
+                wait_service_unloaded(target)
+            except RuntimeError:
+                pass
         if RUNTIME.exists():
             shutil.rmtree(RUNTIME)
         if backup and backup.exists():

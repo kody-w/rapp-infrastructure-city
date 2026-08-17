@@ -27,17 +27,24 @@ script = textwrap.dedent(
     module.sys.platform = "darwin"
     module.bridge_ready = lambda: True
     failed = False
+    loaded = True
     calls = []
     def fake_run(command, **kwargs):
-        global failed
+        global failed, loaded
         calls.append(command)
         if command[1] == "print":
             return subprocess.CompletedProcess(
-                command, 0, stdout="loaded", stderr=""
+                command, 0 if loaded else 113,
+                stdout="loaded" if loaded else "",
+                stderr="" if loaded else "not found",
             )
+        if command[1] == "bootout":
+            loaded = False
         if command[1] == "bootstrap" and kwargs.get("check") and not failed:
             failed = True
             raise subprocess.CalledProcessError(1, command)
+        if command[1] == "bootstrap":
+            loaded = True
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
     module.subprocess.run = fake_run
     try:
