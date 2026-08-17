@@ -366,6 +366,27 @@ assert repair_approval.read_json(
     {},
 )[future_request["token"]]["status"] == "invalid"
 
+bad_repo_request = repair_approval.request(
+    "workflow:bad/repo:1",
+    {
+        "id": "rerun",
+        "label": "Rerun",
+        "kind": "github_rerun",
+        "payload": {"repository": "../..", "run_id": 1},
+        "approval_required": True,
+    },
+    "player",
+)
+try:
+    repair_approval.execute(bad_repo_request["token"])
+    raise AssertionError("dot-segment repository should fail")
+except ValueError as exc:
+    assert "not allowed" in str(exc)
+assert repair_approval.read_json(
+    repair_approval.REQUESTS,
+    {},
+)[bad_repo_request["token"]]["status"] == "failed"
+
 city_daemon.STATE = tmp / "daemon-state"
 lock_results = []
 with city_daemon.tick_lock() as acquired:
