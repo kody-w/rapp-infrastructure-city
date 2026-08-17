@@ -87,7 +87,12 @@ def request(entity_id: str, action: Dict[str, Any], player: str) -> Dict[str, An
         requests = read_json(REQUESTS, {})
         for existing in requests.values():
             try:
-                live = now() <= parse_iso(existing["expires_at"])
+                current = now()
+                live = (
+                    parse_iso(existing["created_at"])
+                    <= current + timedelta(minutes=5)
+                    and current <= parse_iso(existing["expires_at"])
+                )
             except Exception:
                 live = False
             if (
@@ -130,6 +135,11 @@ def execute(token: str) -> Dict[str, Any]:
         record = requests.get(token)
         if not record or record.get("status") != "pending":
             raise ValueError("unknown or already-consumed approval token")
+        if parse_iso(record["created_at"]) > now() + timedelta(minutes=5):
+            record["status"] = "invalid"
+            write_json(REQUESTS, requests)
+            audit({"event": "invalid", "token": token, "reason": "future created_at"})
+            raise ValueError("approval token creation time is in the future")
         if now() > parse_iso(record["expires_at"]):
             record["status"] = "expired"
             write_json(REQUESTS, requests)
