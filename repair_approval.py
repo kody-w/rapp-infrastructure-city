@@ -38,6 +38,14 @@ def parse_iso(value):
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
+def valid_repository(value):
+    text = str(value or "")
+    if not REPO.fullmatch(text):
+        return False
+    owner, name = text.split("/", 1)
+    return owner not in (".", "..") and name not in (".", "..")
+
+
 def read_json(path, default):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -168,7 +176,7 @@ def execute(token: str) -> Dict[str, Any]:
         elif kind == "github_rerun":
             repository = str(payload.get("repository") or "")
             run_id = str(payload.get("run_id") or "")
-            if not REPO.fullmatch(repository) or not run_id.isdigit():
+            if not valid_repository(repository) or not run_id.isdigit():
                 raise ValueError("GitHub repair payload is not allowed")
             command = ["gh", "run", "rerun", run_id, "-R", repository]
         else:
